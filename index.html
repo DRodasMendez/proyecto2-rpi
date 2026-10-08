@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor Raspberry Pi: PIR y LED</title>
+<style>
+  :root {
+    --bg: #f3f4f1; --fg: #1c2321; --muted: #5c6763; --panel: #ffffff; --line: #d3d9d5;
+    --accent: #0f6b57; --accent-fg: #ffffff; --ok: #2e9e4a; --alert: #d9480f; --off: #98a29e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111613; --fg: #e5ebe8; --muted: #97a39e; --panel: #1a211e; --line: #33403b;
+            --accent: #4fc3a1; --accent-fg: #07201a; --ok: #66bb6a; --alert: #ff8a50; --off: #6b7873; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         padding-inline: 16px; padding-block: 20px 40px; }
+  main { max-width: 860px; margin-inline: auto; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+  h1 { font-size: 1.35rem; margin: 0; text-wrap: balance; }
+  .sub { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line);
+           border-radius: 999px; background: var(--panel); font-size: 13.5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); flex: none; }
+  .on .dot { background: var(--ok); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0;
+          display: flex; flex-direction: column; gap: 12px; }
+  h2 { font-size: 0.8rem; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .big { display: flex; align-items: center; gap: 14px; }
+  .pulse { width: 56px; height: 56px; border-radius: 50%; background: var(--off); flex: none; transition: background .2s, box-shadow .2s; }
+  .motion .pulse { background: var(--alert); box-shadow: 0 0 0 10px color-mix(in srgb, var(--alert) 25%, transparent); }
+  .state { font-size: 1.5rem; font-weight: 650; line-height: 1.15; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; color: var(--muted); font-size: 14px; }
+  .meta b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .led { width: 56px; height: 56px; border-radius: 50%; background: var(--off); flex: none; transition: all .2s; border: 3px solid var(--line); }
+  .ledon .led { background: #ff4d3d; border-color: #ff9a8f; box-shadow: 0 0 22px 4px rgba(255, 77, 61, .55); }
+  .btns { display: flex; flex-wrap: wrap; gap: 10px; }
+  button { font: inherit; font-weight: 600; padding: 10px 18px; min-height: 44px; border-radius: 8px; cursor: pointer;
+           border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); }
+  button.alt { background: transparent; color: var(--fg); border-color: var(--line); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ul.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; font-size: 14px; max-height: 260px; overflow-y: auto; }
+  ul.log li { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  ul.log li:last-child { border-bottom: 0; }
+  ul.log time { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; flex: none; }
+  .empty { color: var(--muted); font-size: 14px; }
+  footer { color: var(--muted); font-size: 12.5px; }
+  code { font-family: ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Monitor Raspberry Pi 3</h1>
+      <p class="sub">Sensor PIR (GPIO17) en tiempo real y LED (GPIO27) controlado desde la web</p>
+    </div>
+    <div class="badges">
+      <span class="badge" id="bNube"><i class="dot"></i><span>Nube: conectando…</span></span>
+      <span class="badge" id="bPi"><i class="dot"></i><span>Raspberry: sin datos</span></span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="card" id="cPir" aria-live="polite">
+      <h2>Sensor PIR · entrada</h2>
+      <div class="big"><div class="pulse"></div><div class="state" id="pirTxt">Sin datos</div></div>
+      <div class="meta">
+        <span>Detecciones: <b id="pirCount">0</b></span>
+        <span>Último movimiento: <b id="pirLast">—</b></span>
+        <span>Actualizado hace <b id="pirAge">—</b></span>
+      </div>
+    </section>
+
+    <section class="card" id="cLed">
+      <h2>LED · actuador</h2>
+      <div class="big"><div class="led"></div><div class="state" id="ledTxt">Sin datos</div></div>
+      <div class="btns">
+        <button id="btnOn" disabled>Encender LED</button>
+        <button id="btnOff" class="alt" disabled>Apagar LED</button>
+      </div>
+      <div class="meta"><span>La Raspberry confirma el estado real del pin.</span></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Registro de eventos</h2>
+    <ul class="log" id="log"><li class="empty">Esperando eventos…</li></ul>
+  </section>
+
+  <footer>
+    Datos enviados por la Raspberry Pi 3 mediante MQTT a un broker en la nube (HiveMQ) y recibidos aquí por WebSocket seguro. Sin servidor local.
+    Canal MQTT: <code id="tema"></code>
+  </footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.15.2/dist/mqtt.min.js"></script>
+<script>
+// IMPORTANTE: este valor debe ser IGUAL al de proyecto2_web.py en la Raspberry
+const BASE = "rpi3-paiz-p2-x7k2";
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+
+const $ = id => document.getElementById(id);
+const T = { pir: BASE + "/pir", ledEstado: BASE + "/led/estado", ledSet: BASE + "/led/set", status: BASE + "/status" };
+let lastPirMsg = 0, piOnline = false, ledState = null;
+
+function badge(el, on, text) { el.classList.toggle("on", on); el.querySelector("span").textContent = text; }
+function hhmmss(d) { return d.toLocaleTimeString("es-GT", { hour12: false }); }
+function log(text) {
+  const ul = $("log"); if (ul.firstElementChild && ul.firstElementChild.classList.contains("empty")) ul.innerHTML = "";
+  const li = document.createElement("li");
+  li.innerHTML = "<time></time><span></span>"; li.firstChild.textContent = hhmmss(new Date()); li.lastChild.textContent = text;
+  ul.prepend(li); while (ul.children.length > 40) ul.lastChild.remove();
+}
+function setLed(on) {
+  $("cLed").classList.toggle("ledon", on); $("ledTxt").textContent = on ? "Encendido" : "Apagado";
+  if (ledState !== null && ledState !== on) log("LED " + (on ? "encendido" : "apagado"));
+  ledState = on;
+}
+function setPir(d) {
+  $("cPir").classList.toggle("motion", !!d.movimiento);
+  $("pirTxt").textContent = d.movimiento ? "¡Movimiento detectado!" : "Sin movimiento";
+  $("pirCount").textContent = d.conteo; $("pirLast").textContent = d.ultimo || "—";
+}
+
+const client = mqtt.connect(BROKER, { clientId: "web-" + Math.random().toString(16).slice(2, 10), reconnectPeriod: 2000, connectTimeout: 8000 });
+client.on("connect", () => {
+  badge($("bNube"), true, "Nube: conectada");
+  client.subscribe([T.pir, T.ledEstado, T.status]);
+  log("Conectado al broker en la nube");
+});
+client.on("reconnect", () => badge($("bNube"), false, "Nube: reconectando…"));
+client.on("close", () => { badge($("bNube"), false, "Nube: desconectada"); $("btnOn").disabled = $("btnOff").disabled = true; });
+client.on("error", e => log("Error: " + e.message));
+client.on("message", (topic, buf) => {
+  const msg = buf.toString();
+  if (topic === T.pir) {
+    try {
+      const d = JSON.parse(msg); const prev = $("pirTxt").dataset.m; lastPirMsg = Date.now();
+      setPir(d); if (prev !== String(d.movimiento) && prev !== undefined) log(d.movimiento ? "PIR: movimiento detectado" : "PIR: sin movimiento");
+      $("pirTxt").dataset.m = String(d.movimiento);
+    } catch (e) { /* mensaje inválido */ }
+  } else if (topic === T.ledEstado) {
+    setLed(msg === "ON");
+  } else if (topic === T.status) {
+    piOnline = msg === "online"; refreshPi();
+    if (!piOnline) log("Raspberry desconectada");
+  }
+});
+function refreshPi() {
+  const fresh = Date.now() - lastPirMsg < 15000;
+  const ok = piOnline && fresh;
+  badge($("bPi"), ok, ok ? "Raspberry: en línea" : (piOnline ? "Raspberry: sin datos recientes" : "Raspberry: desconectada"));
+  $("btnOn").disabled = $("btnOff").disabled = !(client.connected && ok);
+  $("pirAge").textContent = lastPirMsg ? Math.round((Date.now() - lastPirMsg) / 1000) + " s" : "—";
+}
+setInterval(refreshPi, 1000);
+
+function enviar(cmd) { client.publish(T.ledSet, cmd, { qos: 0 }); log("Comando enviado: LED " + (cmd === "ON" ? "ON" : "OFF")); }
+$("btnOn").onclick = () => enviar("ON");
+$("btnOff").onclick = () => enviar("OFF");
+$("tema").textContent = BASE;
+</script>
+</body>
+</html>
